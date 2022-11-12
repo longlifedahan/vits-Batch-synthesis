@@ -147,11 +147,18 @@ class MultiHeadAttention(nn.Module):
 
   def attention(self, query, key, value, mask=None):
     # reshape [b, d, t] -> [b, n_h, t, d_k]
+    # When generating ONNX, Tensor.size() returns a tensor
+    # Otherwise, it returns an int
     b, d, t_s, t_t = (*key.size(), query.size(2))
+    if type(b) != torch.Tensor:
+      b = torch.tensor(b)
+      d = torch.tensor(d)
+      t_s = torch.tensor(t_s)
+      t_t = torch.tensor(t_t)
     query = query.view(b, self.n_heads, self.k_channels, t_t).transpose(2, 3)
     key = key.view(b, self.n_heads, self.k_channels, t_s).transpose(2, 3)
     value = value.view(b, self.n_heads, self.k_channels, t_s).transpose(2, 3)
-
+  
     scores = torch.matmul(query / math.sqrt(self.k_channels), key.transpose(-2, -1))
     if self.window_size is not None:
       assert t_s == t_t, "Relative attention is only available for self-attention."
@@ -199,15 +206,12 @@ class MultiHeadAttention(nn.Module):
   def _get_relative_embeddings(self, relative_embeddings, length):
     max_relative_position = 2 * self.window_size + 1
     # Pad first before slice to avoid using cond ops.
-    pad_length = max(length - (self.window_size + 1), 0)
-    slice_start_position = max((self.window_size + 1) - length, 0)
+    pad_length = torch.clamp_min(length - (self.window_size + 1), 0)
+    slice_start_position = torch.clamp_min((self.window_size + 1) - length, 0)
     slice_end_position = slice_start_position + 2 * length - 1
-    if pad_length > 0:
-      padded_relative_embeddings = F.pad(
+    padded_relative_embeddings = F.pad(
           relative_embeddings,
           commons.convert_pad_shape([[0, 0], [pad_length, pad_length], [0, 0]]))
-    else:
-      padded_relative_embeddings = relative_embeddings
     used_relative_embeddings = padded_relative_embeddings[:,slice_start_position:slice_end_position]
     return used_relative_embeddings
 
